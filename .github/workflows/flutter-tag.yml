@@ -1,0 +1,41 @@
+# https://blog.logto.io/zh-CN/automatic-github-workflow-rerun
+name: Flutter Tag Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+-[0-9]+'
+
+jobs:
+  # 1. 原构建作业（保持不变）
+  run-flutter-tag-build:
+    uses: ./.github/workflows/flutter-build.yml
+    secrets: inherit
+    with:
+      upload-artifact: true
+      upload-tag: ${{ github.ref_name }}
+
+  # 2. 直接在原工作流中嵌入重试逻辑（无需调用 rerun.yml）
+  trigger-rerun-on-failure:
+    needs: run-flutter-tag-build
+    if: failure() && fromJSON(github.run_attempt) < 3
+    runs-on: ubuntu-latest
+    steps:
+      - name: 等待原工作流结束
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: gh run watch ${{ github.run_id }} > /dev/null 2>&1
+
+      - name: 直接重试失败作业（无需外部工作流）
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 直接调用 gh run rerun，无需再触发外部 rerun.yml
+          gh run rerun ${{ github.run_id }} --failed \
+            --ref ${{ github.head_ref || github.ref_name }}
