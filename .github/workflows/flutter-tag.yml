@@ -11,31 +11,34 @@ on:
       - '[0-9]+.[0-9]+.[0-9]+-[0-9]+'
 
 jobs:
-  # 1. 原构建作业（保持不变）
   run-flutter-tag-build:
-    uses: ./.github/workflows/flutter-build.yml
-    secrets: inherit
-    with:
-      upload-artifact: true
-      upload-tag: ${{ github.ref_name }}
-
-  # 2. 直接在原工作流中嵌入重试逻辑（无需调用 rerun.yml）
-  trigger-rerun-on-failure:
-    needs: run-flutter-tag-build
-    if: failure() && fromJSON(github.run_attempt) < 3
     runs-on: ubuntu-latest
+    outputs:
+      build_status: ${{ job.status }}
     steps:
-      - name: 等待原工作流结束
-        env:
-          GH_REPO: ${{ github.repository }}
-          GH_TOKEN: ${{ github.token }}
-        run: gh run watch ${{ github.run_id }} > /dev/null 2>&1
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Required for accurate tag detection
 
-      - name: 直接重试失败作业（无需外部工作流）
-        env:
-          GH_REPO: ${{ github.repository }}
-          GH_TOKEN: ${{ github.token }}
+      - name: Run flutter-build.yml
+        id: flutter_build
+        uses: ./.github/workflows/flutter-build.yml
+        secrets: inherit
+        with:
+          upload-artifact: true
+          upload-tag: ${{ github.ref_name }}
+
+  retry:
+    needs: run-flutter-tag-build
+    runs-on: ubuntu-latest
+    if: ${{ needs.run-flutter-tag-build.result == 'failure' && github.run_number <= 3 }}
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RUN_NUMBER: ${{ github.run_number }}
+    steps:
+      - name: Output run number
+        run: echo "RUN_NUMBER: $RUN_NUMBER"
+      - name: Trigger Retry Workflow
         run: |
-          # 直接调用 gh run rerun，无需再触发外部 rerun.yml
-          gh run rerun ${{ github.run_id }} --failed \
-            --ref ${{ github.head_ref || github.ref_name }}
+          gh workflow run "${{ github.workflow }}" --ref "${{ github.ref }}"
